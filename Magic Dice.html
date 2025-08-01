@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Magic Dice</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Three.js Library for 3D graphics -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        /* Ensure the canvas is responsive and centered */
+        #dice-canvas {
+            width: 100%;
+            height: 100%;
+            max-width: 400px;
+            max-height: 400px;
+            cursor: grab;
+        }
+        #dice-canvas:active {
+            cursor: grabbing;
+        }
+    </style>
+</head>
+<body class="bg-gray-800 from-gray-900 to-indigo-900 bg-gradient-to-br min-h-screen flex flex-col items-center justify-center font-sans text-white p-4 overflow-hidden">
+
+    <div class="text-center mb-8">
+        <h1 class="text-4xl md:text-5xl font-bold text-cyan-300 drop-shadow-lg">Magic Dice</h1>
+        <p class="text-gray-400 mt-2">Click the button or swipe the dice to roll!</p>
+        <p id="rollCounter" class="text-lg text-gray-300 mt-4">Rolls: 0</p>
+    </div>
+
+    <!-- Canvas Container -->
+    <div id="canvas-container" class="w-full h-64 flex items-center justify-center relative">
+        <canvas id="dice-canvas"></canvas>
+    </div>
+
+    <!-- Roll Button -->
+    <button id="rollButton" class="mt-8 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold py-4 px-12 rounded-full shadow-lg hover:shadow-xl transform hover:-translate-y-1 transition-all duration-300 text-2xl disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:from-cyan-500">
+        Roll Dice
+    </button>
+
+    <script>
+        // --- Basic Setup ---
+        const rollButton = document.getElementById('rollButton');
+        const canvas = document.getElementById('dice-canvas');
+        const rollCounterElement = document.getElementById('rollCounter');
+        const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+        renderer.setSize(canvas.clientWidth, canvas.clientHeight);
+        renderer.shadowMap.enabled = true;
+
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(50, canvas.clientWidth / canvas.clientHeight, 0.1, 1000);
+        camera.position.z = 6;
+
+        // --- Lighting ---
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+        scene.add(ambientLight);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        directionalLight.position.set(5, 10, 7.5);
+        directionalLight.castShadow = true;
+        scene.add(directionalLight);
+
+        // --- Dice Texture Generation with simulated rounded edges ---
+        function createDiceFaceTexture(number) {
+            const canvas = document.createElement('canvas');
+            const size = 256;
+            canvas.width = size;
+            canvas.height = size;
+            const context = canvas.getContext('2d');
+            
+            context.fillStyle = '#FFFDD0';
+            context.fillRect(0, 0, size, size);
+
+            const gradient = context.createRadialGradient(size / 2, size / 2, size / 2.5, size / 2, size / 2, size / 2 + size / 4);
+            gradient.addColorStop(0, 'rgba(255,255,255,0)');
+            gradient.addColorStop(1, 'rgba(0,0,0,0.2)');
+            context.fillStyle = gradient;
+            context.fillRect(0, 0, size, size);
+
+            context.fillStyle = '#B22222';
+            const dotPositions = {
+                1: [[0.5, 0.5]], 2: [[0.25, 0.25], [0.75, 0.75]], 3: [[0.25, 0.25], [0.5, 0.5], [0.75, 0.75]],
+                4: [[0.25, 0.25], [0.75, 0.25], [0.25, 0.75], [0.75, 0.75]],
+                5: [[0.25, 0.25], [0.75, 0.25], [0.5, 0.5], [0.25, 0.75], [0.75, 0.75]],
+                6: [[0.25, 0.25], [0.75, 0.25], [0.25, 0.5], [0.75, 0.5], [0.25, 0.75], [0.75, 0.75]]
+            };
+
+            dotPositions[number].forEach(([x, y]) => {
+                context.beginPath();
+                context.arc(x * size, y * size, 22, 0, Math.PI * 2);
+                context.fill();
+            });
+
+            return new THREE.CanvasTexture(canvas);
+        }
+        
+        const materials = [
+            new THREE.MeshStandardMaterial({ map: createDiceFaceTexture(1) }), // right
+            new THREE.MeshStandardMaterial({ map: createDiceFaceTexture(6) }), // left
+            new THREE.MeshStandardMaterial({ map: createDiceFaceTexture(2) }), // top
+            new THREE.MeshStandardMaterial({ map: createDiceFaceTexture(5) }), // bottom
+            new THREE.MeshStandardMaterial({ map: createDiceFaceTexture(3) }), // front
+            new THREE.MeshStandardMaterial({ map: createDiceFaceTexture(4) })  // back
+        ];
+
+        const geometry = new THREE.BoxGeometry(2, 2, 2);
+        const dice = new THREE.Mesh(geometry, materials);
+        dice.castShadow = true;
+        scene.add(dice);
+
+        const floorGeometry = new THREE.PlaneGeometry(20, 20);
+        const floorMaterial = new THREE.MeshStandardMaterial({
+            color: 0x222222,
+            metalness: 0.1,
+            roughness: 0.4
+        });
+        const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+        floor.rotation.x = -Math.PI / 2;
+        floor.position.y = -2;
+        floor.receiveShadow = true;
+        scene.add(floor);
+        
+        let audioContext;
+        function playLudoDiceSound() {
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            oscillator.type = 'triangle';
+            oscillator.frequency.value = 700;
+            gainNode.gain.setValueAtTime(0.8, audioContext.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.1);
+            oscillator.start(audioContext.currentTime);
+            oscillator.stop(audioContext.currentTime + 0.1);
+        }
+
+        function playCelebrationSound() {
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            oscillator.type = 'sine';
+            oscillator.frequency.setValueAtTime(523.25, audioContext.currentTime); // C5
+            oscillator.frequency.exponentialRampToValueAtTime(1046.50, audioContext.currentTime + 0.5); // C6
+            gainNode.gain.setValueAtTime(0.5, audioContext.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
+            oscillator.start(audioContext.currentTime);
+            oscillator.stop(audioContext.currentTime + 0.5);
+        }
+
+        // --- Confetti Celebration ---
+        const confettiCount = 300;
+        const confettiParticles = [];
+        const confettiGeometry = new THREE.BufferGeometry();
+        const confettiPositions = new Float32Array(confettiCount * 3);
+        const confettiColors = new Float32Array(confettiCount * 3);
+        const color = new THREE.Color();
+
+        for (let i = 0; i < confettiCount; i++) {
+            confettiParticles.push({
+                position: new THREE.Vector3(),
+                velocity: new THREE.Vector3(),
+                lifetime: 0
+            });
+            confettiPositions[i * 3] = 0;
+            confettiPositions[i * 3 + 1] = 0;
+            confettiPositions[i * 3 + 2] = 0;
+        }
+        confettiGeometry.setAttribute('position', new THREE.BufferAttribute(confettiPositions, 3));
+        confettiGeometry.setAttribute('color', new THREE.BufferAttribute(confettiColors, 3));
+        const confettiMaterial = new THREE.PointsMaterial({ size: 0.15, vertexColors: true, transparent: true, opacity: 0 });
+        const confettiSystem = new THREE.Points(confettiGeometry, confettiMaterial);
+        scene.add(confettiSystem);
+
+        function launchConfetti() {
+            confettiMaterial.opacity = 1.0;
+            for (let i = 0; i < confettiCount; i++) {
+                const p = confettiParticles[i];
+                p.position.set(0, 0, 0);
+                
+                color.setHSL(Math.random(), 1.0, 0.7);
+                confettiColors[i * 3] = color.r;
+                confettiColors[i * 3 + 1] = color.g;
+                confettiColors[i * 3 + 2] = color.b;
+
+                const phi = Math.random() * Math.PI * 2;
+                const theta = Math.acos(2 * Math.random() - 1);
+                const speed = Math.random() * 4 + 4;
+                
+                p.velocity.set(
+                    speed * Math.sin(theta) * Math.cos(phi),
+                    speed * Math.sin(theta) * Math.sin(phi),
+                    speed * Math.cos(theta)
+                );
+                p.lifetime = Math.random() * 2 + 1; // Lifetime of 1 to 3 seconds
+            }
+            confettiGeometry.attributes.position.needsUpdate = true;
+            confettiGeometry.attributes.color.needsUpdate = true;
+        }
+
+
+        let isRolling = false;
+        let rollCount = 0;
+        let targetQuaternion = new THREE.Quaternion();
+        
+        const sideRotations = {
+            1: new THREE.Quaternion().setFromEuler(new THREE.Euler(0, -Math.PI / 2, 0)),
+            2: new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI / 2, 0, 0)),
+            3: new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, 0)),
+            4: new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI, 0)),
+            5: new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0)),
+            6: new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI / 2, 0))
+        };
+
+        function rollDice(swipeVelocity = { x: 0, y: 0 }) {
+            if (isRolling) return;
+            isRolling = true;
+            rollButton.disabled = true;
+            rollButton.classList.add('opacity-50', 'cursor-not-allowed');
+            
+            rollCount++;
+            rollCounterElement.textContent = `Rolls: ${rollCount}`;
+
+            let randomSide;
+            if (Math.random() < 1 / 10000) {
+                randomSide = 1;
+            } else {
+                randomSide = Math.floor(Math.random() * 5) + 2;
+            }
+            
+            if (randomSide === 1) {
+                playCelebrationSound();
+                launchConfetti();
+            } else {
+                playLudoDiceSound();
+            }
+
+            const finalRotation = sideRotations[randomSide];
+            const swipeInfluence = 10;
+            const randomTumble = new THREE.Quaternion()
+                .setFromEuler(new THREE.Euler(
+                    (Math.random() - 0.5 + swipeVelocity.y) * Math.PI * swipeInfluence,
+                    (Math.random() - 0.5 + swipeVelocity.x) * Math.PI * swipeInfluence,
+                    (Math.random() - 0.5) * Math.PI * 2
+                ));
+            targetQuaternion.multiplyQuaternions(randomTumble, finalRotation);
+
+            setTimeout(() => {
+                isRolling = false;
+                rollButton.disabled = false;
+                rollButton.classList.remove('opacity-50', 'cursor-not-allowed');
+            }, 2000);
+        }
+        
+        rollButton.addEventListener('click', () => rollDice());
+
+        let isDragging = false;
+        let previousMousePosition = { x: 0, y: 0 };
+        let dragVelocity = { x: 0, y: 0 };
+
+        function onPointerDown(event) {
+            isDragging = true;
+            previousMousePosition = {
+                x: event.clientX || event.touches[0].clientX,
+                y: event.clientY || event.touches[0].clientY
+            };
+        }
+
+        function onPointerUp(event) {
+            if (!isDragging) return;
+            isDragging = false;
+            
+            const flickThreshold = 5;
+            if (Math.abs(dragVelocity.x) > flickThreshold || Math.abs(dragVelocity.y) > flickThreshold) {
+                rollDice(dragVelocity);
+            }
+        }
+
+        function onPointerMove(event) {
+            if (!isDragging) return;
+            const clientX = event.clientX || event.touches[0].clientX;
+            const clientY = event.clientY || event.touches[0].clientY;
+            const deltaMove = {
+                x: clientX - previousMousePosition.x,
+                y: clientY - previousMousePosition.y
+            };
+            dragVelocity = { x: deltaMove.x * 0.05, y: deltaMove.y * 0.05 };
+            if (!isRolling) {
+                const deltaRotationQuaternion = new THREE.Quaternion()
+                    .setFromEuler(new THREE.Euler(
+                        (deltaMove.y * 1) * Math.PI / 180,
+                        (deltaMove.x * 1) * Math.PI / 180,
+                        0
+                    ));
+                dice.quaternion.multiplyQuaternions(deltaRotationQuaternion, dice.quaternion);
+            }
+            previousMousePosition = { x: clientX, y: clientY };
+        }
+
+        canvas.addEventListener('mousedown', onPointerDown);
+        canvas.addEventListener('mouseup', onPointerUp);
+        canvas.addEventListener('mousemove', onPointerMove);
+        canvas.addEventListener('touchstart', onPointerDown, { passive: false });
+        canvas.addEventListener('touchend', onPointerUp);
+        canvas.addEventListener('touchmove', onPointerMove, { passive: false });
+        
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            const delta = clock.getDelta();
+
+            if(isRolling) {
+                dice.quaternion.slerp(targetQuaternion, 0.07);
+            } else if (!isDragging) {
+                dice.rotation.y += 0.002;
+            }
+
+            // Animate confetti
+            let activeConfetti = 0;
+            for (let i = 0; i < confettiCount; i++) {
+                const p = confettiParticles[i];
+                if (p.lifetime > 0) {
+                    activeConfetti++;
+                    p.lifetime -= delta;
+                    p.velocity.y -= 9.8 * delta; // gravity
+                    p.position.addScaledVector(p.velocity, delta);
+                    
+                    confettiPositions[i * 3] = p.position.x;
+                    confettiPositions[i * 3 + 1] = p.position.y;
+                    confettiPositions[i * 3 + 2] = p.position.z;
+                }
+            }
+
+            if (activeConfetti > 0) {
+                confettiGeometry.attributes.position.needsUpdate = true;
+            }
+            
+            if (confettiMaterial.opacity > 0 && activeConfetti === 0) {
+                confettiMaterial.opacity -= delta; // Fade out
+            }
+
+
+            renderer.render(scene, camera);
+        }
+
+        animate();
+
+        window.addEventListener('resize', () => {
+            const container = document.getElementById('canvas-container');
+            camera.aspect = container.clientWidth / container.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(container.clientWidth, container.clientHeight);
+        });
+    </script>
+</body>
+</html>
